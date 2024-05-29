@@ -1,0 +1,83 @@
+#!/bin/bash
+help() {
+	echo "  -l DATABASE                 list books from the database"
+	echo "  -h                          show this help message"
+	echo "  DATABASE                    operate on an entire bible"
+	echo "  DATABASE <book>             operate only on provided book"
+	echo "  DATABASE <bookFrom> <bookTo>  operate only on subsection"
+	echo
+	echo
+	echo
+	echo "Note: <bookFrom> and <bootTo> are inclusive"
+	echo "DATABASE is of MyBible Android Application's SQLite4 database module format"
+	echo "all <book>s can be specified as book_number or partial string from a short_name or a long_name"
+
+	exit 0
+}
+
+listBooks() {
+	sqlite3 "$1" \
+		-column -header \
+		"SELECT book_number, short_name, long_name
+   FROM books"
+}
+
+getBookNumber() {
+	sqlite3 "$1" \
+		"SELECT book_number
+   FROM books
+   WHERE book_number = '$2'
+      OR short_name like '%${2}%'
+      OR long_name like '%${2}%' "
+
+}
+
+getHeadings() {
+	sql="
+  SELECT b.book_number, b.short_name, b.long_name, v.chapter
+  FROM verses v
+  LEFT JOIN books b
+  ON b.book_number = v.book_number
+  WHERE v.verse = 1 "
+
+	[ -n "$2" ] && [ -n "$3" ] && sql+="AND b.book_number >= '$2' AND b.book_number <= '$3'"
+	[ -n "$2" ] && [ -z "$3" ] && sql+="AND b.book_number = '$2'"
+
+	sqlite3 "$1" -noheader "$sql"
+}
+
+writeChapters() {
+	IFS="|"
+	while read -r bookNumber shortName longName chapter; do
+		printf -v fileName "%03d_%03d.html" "$bookNumber" "$chapter"
+		(
+			[ "$chapter" = "1" ] && echo "<h1>$longName</h1>"
+			echo "<h2>$shortName $chapter</h2>"
+			echo "<p>"
+			sqlite3 "$db" -html -noheader "
+    SELECT verse, text
+    FROM verses
+    WHERE book_number = '$bookNumber'
+        AND chapter = '$chapter'
+        " | sed -E 's|<(/?)TR>|<\1span>|g;s|<(/?)TD>|<\1span>|g'
+			echo "</p>"
+		) >"$fileName"
+	done
+}
+
+[ "$1" = "-h" ] && help
+[ -n "$1" ] || help
+[ "$1" = "-l" ] && [ -f "$2" ] && listBooks "$2" && exit 0
+[ "$1" = "-l" ] && echo "you should provide database path as a second argument" && exit 0
+[ -f "$1" ] || (echo "database file does not exist" && exit 0)
+
+db=$1
+if [ -n "$3" ]; then
+	bookFrom=$(getBookNumber "$1" "$2")
+	bookTo=$(getBookNumber "$1" "$3")
+	getHeadings "$1" "$bookFrom" "$bookTo" | writeChapters
+elif [ -n "$2" ]; then
+	getHeadings "$1" "$2" | writeChapters
+else
+	getHeadings "$1" | writeChapters
+fi
